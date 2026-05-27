@@ -1,0 +1,55 @@
+---
+description: SpecFold — implement from spec; minimal scope; traceability
+alwaysApply: true
+---
+
+# SpecFold (personal)
+
+## Intent
+
+Work ships **from written spec**, not guesswork. Prefer **small diffs** that complete the spec; avoid ceremony (no Jira/Confluence pipeline in this kit).
+
+## Where specs live
+
+- Default: `specfold/<feature-kebab>/spec.md` at workspace root.
+- Optional same folder: `plan.md` (checklist), `acceptance.md` (AC-only), **`repo_kb.md`** (captured **existing codebase** map from one or more `@`-mentioned repos — see `.cursor/agents/repo_kb.md`).
+- If the user names another path, use that path; stay inside the workspace.
+
+When creating a new feature folder for the first time, say which path you are using. Do not overwrite existing `spec.md` without asking.
+
+## Repo knowledge base (`repo_kb.md`)
+
+- **Purpose:** When a change spans **multiple repos/folders** or needs **brownfield** grounding, generate **`specfold/<feature>/repo_kb.md` first** via `@.cursor/agents/repo_kb.md` with all relevant paths `@`-mentioned.
+- **Using it:** Any agent that writes code (`ship_from_spec`, `angular_from_spec`, `python_*`, `fullstack_from_spec`) must **read `repo_kb.md` if it exists** in the same feature folder, or if the user `@`-mentions it. Treat it as **facts about the codebase**, not as product requirements — **`spec.md` still wins** for scope and acceptance.
+- **Conflicts:** If `repo_kb.md` and `spec.md` disagree on feasibility, flag it in chat and prefer updating the **spec** after human confirmation.
+
+## `spec.md` shape (keep it short)
+
+Use headings the agent can scan:
+
+1. **Problem** — one paragraph.
+2. **In scope / Out of scope** — bullets.
+3. **Constraints** — stack, compatibility, flags, perf, security notes.
+4. **Behavior & APIs** — endpoints, types, or UI behavior as needed.
+5. **Acceptance** — testable bullets or Gherkin; optional IDs **`SF-001`**, `SF-002`, … for traceability.
+
+## Coding rules
+
+- **Do not expand product scope** beyond `spec.md` / `acceptance.md`. If something is missing, list **questions** and **assumptions** before a large change.
+- **Prefer additive, backward-compatible** changes; version or flag breaking behavior.
+- Keep **HTTP handlers, request/response models, and OpenAPI (or equivalent)** aligned when APIs change.
+- **Traceability:** reference **`SF-…`** IDs in commit messages or PR text when the spec uses them.
+- **Security (compressed):** follow OWASP-minded defaults — validate inputs, encode/sanitize outputs, no secrets in code, server-side authz, fail safe errors without leaking internals.
+
+## When the user asks to “implement”
+
+1. Read `spec.md` (and `plan.md` / `acceptance.md` if present). **If `specfold/<feature>/repo_kb.md` exists or is `@`-mentioned, read it first** and align edits with documented layout and conventions.
+2. Implement in **thin slices**; match acceptance items to code/tests.
+3. If the spec is wrong or incomplete, **stop and propose spec edits** instead of inventing requirements.
+
+## Stack-specific rules (Cursor applies by glob)
+
+- **Angular** — `.cursor/rules/angular.mdc` (`*.ts`, `*.html`, `*.scss`, `angular.json`, …).
+- **Python** — `.cursor/rules/python.mdc` (`*.py`, `pyproject.toml`, Alembic, SAM/CDK templates when present — includes **AWS** guidance for boto3, Lambda, ECS, DynamoDB, S3, SQS, etc.).
+
+When editing those files, obey those rules in addition to this file.

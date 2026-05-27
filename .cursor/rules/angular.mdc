@@ -1,0 +1,42 @@
+---
+description: Angular — structure, RxJS, forms, performance, security, tests
+globs: "**/*.ts,**/*.html,**/*.scss,**/angular.json,**/tsconfig*.json"
+alwaysApply: false
+---
+
+# SpecFold — Angular
+
+Follow **existing** project layout (modules vs standalone, state library). Do not introduce a second architectural style in one feature without an explicit spec note.
+
+## Structure & modules
+
+- Prefer **standalone components** and explicit `imports[]` when the repo already does; otherwise match **NgModule** patterns in-tree.
+- **Lazy-load** feature routes; keep the root shell light.
+- **Smart vs dumb:** smart containers load data and handle side effects; presentational components use `@Input` / `@Output` only.
+
+## State & async
+
+- Match the repo: **Signals**, **RxJS-only**, or **NgRx** — pick one strategy per feature.
+- Prefer **`AsyncPipe`** in templates to avoid subscription leaks.
+- RxJS: `switchMap` when later emissions should cancel prior work; `exhaustMap` for double-submit guards; `catchError` at HTTP boundaries.
+
+## Forms & a11y
+
+- **Reactive forms** for multi-field or async validation; align client validators with server rules when the spec says so.
+- Errors: associate messages with controls (`aria-describedby`, invalid state on inputs).
+
+## Security
+
+- **Never** render untrusted HTML without sanitization; use `DomSanitizer` only for known-safe patterns.
+- Avoid tokens in URLs and logs; use HTTP-only cookies or headers per project auth design.
+
+## Performance
+
+- Use **`ChangeDetectionStrategy.OnPush`** on presentational components when inputs are immutable or observables drive the view.
+- Avoid heavy sync work in constructors; use `ngOnInit` / `effect()` / `afterNextRender` as appropriate.
+- Respect **bundle budgets** in `angular.json`.
+
+## Tests
+
+- Unit: **Jest** or **Karma/Jasmine** per project; assert **user-visible behavior** tied to spec acceptance, not private fields.
+- E2E: **Cypress** or **Playwright** only where the spec calls for critical flows.

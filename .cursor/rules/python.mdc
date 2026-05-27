@@ -1,0 +1,97 @@
+---
+description: Python — style, FastAPI, SQLAlchemy, Alembic, AWS (boto3, Lambda, containers, IaC)
+globs: "**/*.py,**/pyproject.toml,**/requirements*.txt,**/alembic/**/*.py,**/alembic.ini,**/cdk.json,**/template.yaml,**/samconfig.toml"
+alwaysApply: false
+---
+
+# SpecFold — Python
+
+Assume **FastAPI + Pydantic** and **SQLAlchemy** unless the repo clearly uses something else — then match the codebase.
+
+## Style & typing
+
+- Follow **`ruff` / `black`** and `pyproject.toml` (line length, import order).
+- **Type hints** on public functions and service methods; avoid bare `Any` at boundaries.
+
+## Naming
+
+- **`snake_case`** — functions, variables, modules · **`PascalCase`** — classes · **`UPPER_SNAKE`** — module constants.
+
+## Layout (adapt paths to repo)
+
+- **Routers** — thin HTTP handlers; validate I/O; delegate to services.
+- **Services / domain** — business rules; unit-test without HTTP.
+- **Models** — ORM entities; use **separate Pydantic schemas** at API boundaries when the project does.
+- **DB** — session factory, engine; **Alembic** for migrations.
+- **Settings** — `pydantic-settings` or project equivalent; **no secrets in git**.
+
+## FastAPI & HTTP
+
+- **`Depends()`** for DB sessions, auth, config — avoid globals for request-scoped state.
+- **`response_model`**, tags, and explicit status codes for stable contracts.
+- Verbs: **`POST` → 201** with `Location` when creating; **`GET` single missing → 404** when appropriate; **`DELETE` → 204**; consistent **error body** shape (e.g. problem+json if used).
+- **Pydantic v2** models for request/response; validate at the edge.
+- **OpenAPI** must stay aligned with behavior when endpoints change.
+
+## Errors & logging
+
+- Map domain errors to HTTP; **no stack traces** in production responses.
+- Log with **structured** context; never log secrets or full PII.
+
+## Async
+
+- If the app is **async end-to-end**, use async routes and async DB drivers consistently; do not block the event loop on CPU-heavy work.
+
+## Data access (SQLAlchemy)
+
+- Prefer **2.0-style** `select()` if the codebase does.
+- Avoid **N+1** — `selectinload` / `joinedload` or narrow projections for list endpoints.
+- **Alembic:** review autogen scripts; one logical change per revision when practical; do not rewrite applied migrations — add a new revision.
+- **Raw SQL:** bound parameters only; never interpolate user input into SQL strings.
+- **Transactions:** one transaction per use-case when possible; keep transactions short.
+
+## Tests
+
+- **`pytest`** — arrange / act / assert; fixtures for DB/API clients; no production data.
+
+## AWS (when the service runs on AWS)
+
+Match the repo’s pattern: **Lambda**, **ECS/Fargate**, **EKS**, **App Runner**, **Elastic Beanstalk**, or **CDK / SAM / Terraform** — do not invent a new deployment model unless the spec asks.
+
+### Credentials & config
+
+- Use **IAM roles** for compute (task role, Lambda execution role) — **no long-lived access keys** in code or baked into images.
+- Read secrets from **Secrets Manager** or **SSM Parameter Store** (or the platform’s secret injection); never commit secrets.
+- Prefer **explicit AWS region** from env or settings; fail fast if required env vars are missing in prod.
+
+### SDK usage
+
+- **`boto3`** / **`botocore`** for sync; **`aioboto3`** when the call chain is async — reuse **clients per process** where appropriate; avoid creating a new client on every hot-path call without reason.
+- Use **high-level APIs** when they fit (e.g. S3 transfer, DynamoDB resource) but keep **retry / timeout** behavior aligned with team defaults (`botocore.config.Config`).
+
+### Lambda
+
+- **Handler** thin: parse event, delegate to pure/testable functions; return structured errors the caller expects.
+- Respect **timeout and memory** in design; avoid blocking the whole handler on unbounded work — **SQS partial batch failure** response shape when using SQS triggers.
+- **Cold start:** lazy-import heavy deps when the team already does; don’t micro-optimize unless the spec calls for it.
+
+### Messaging & events
+
+- **SQS:** idempotent processing, visibility timeout, DLQ strategy as in spec; **SNS** fan-out: validate message schema at the boundary.
+- **EventBridge:** use detail-type and source conventions already in the repo.
+
+### Data stores
+
+- **DynamoDB:** explicit partition/sort keys, **conditional writes** for concurrency, avoid unbounded scans; pagination for lists.
+- **S3:** server-side encryption defaults, **presigned URLs** for browser upload/download when applicable; validate `Content-Type` / size limits at the API edge.
+- **RDS/Aurora from Lambda or ECS:** use **connection pooling** appropriate to the runtime (RDS Proxy, pooler, or short-lived connections per invocation per team standard).
+
+### Observability
+
+- **Structured logs** (JSON) when CloudWatch Logs is standard; include **request id / trace id** when API Gateway or ALB passes them.
+- **X-Ray** or **OpenTelemetry** only if the project already uses them — wire spans consistently.
+
+### IaC (Python CDK or adjacent)
+
+- **Least-privilege IAM** policies; tighten resource ARNs where possible; no `*` actions on `*` resources in production templates unless justified in spec.
+- Keep **environment-specific** values in context/parameters — not hardcoded account IDs unless the repo convention does.
