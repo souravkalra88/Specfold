@@ -1,6 +1,6 @@
 ---
-description: Python — style, FastAPI, SQLAlchemy, Alembic, AWS (boto3, Lambda, containers, IaC) (SpecFold v2)
-globs: "**/*.py,**/pyproject.toml,**/requirements*.txt,**/alembic/**/*.py,**/alembic.ini,**/cdk.json,**/template.yaml,**/samconfig.toml"
+description: Python — style, FastAPI, SQLAlchemy, Alembic, AWS (boto3, Lambda, containers, IaC, SAM, Serverless) (SpecFold v2)
+globs: "**/*.py,**/pyproject.toml,**/requirements*.txt,**/alembic/**/*.py,**/alembic.ini,**/cdk.json,**/template.yaml,**/samconfig.toml,**/serverless.yml,**/serverless.yaml"
 alwaysApply: false
 ---
 
@@ -467,6 +467,490 @@ Match the repo's pattern: **Lambda**, **ECS/Fargate**, **EKS**, **App Runner**, 
 
 - Tighten resource ARNs where possible; no `*` actions on `*` resources in production
 - Keep **environment-specific** values in context/parameters
+
+---
+
+## FastAPI on AWS Lambda
+
+### Deployment Options
+
+Match the repo's pattern: **SAM** or **Serverless Framework** — do not switch mid-project unless the spec asks.
+
+### Lambda Handler Pattern
+
+Use **Mangum** adapter to convert ASGI (FastAPI) to Lambda event format:
+
+```python
+# lambda_handler.py
+from mangum import Mangum
+from app.main import app
+
+handler = Mangum(
+    app,
+    lifespan="off"  # Disable lifespan events for Lambda
+)
+```
+
+---
+
+### Option 1: AWS SAM (Serverless Application Model)
+
+**File:** `template.yaml`
+
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: FastAPI Lambda API
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 1024
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        DYNAMODB_TABLE: !Ref OrdersTable
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+Resources:
+  # API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'*'"
+        AllowOrigin: "'*'"
+
+  # Lambda Function
+  FastApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'risk-api-${Environment}'
+      Handler: lambda_handler.handler
+      CodeUri: .
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /
+            Method: ANY
+        Proxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /{proxy+}
+            Method: ANY
+
+  # DynamoDB Table
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'orders-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  # S3 Bucket
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'risk-data-${Environment}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  ApiUrl:
+    Description: API Endpoint
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/"
+  
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt FastApiFunction.Arn
+```
+
+**Commands:**
+```bash
+# Build
+sam build
+
+# Deploy (first time)
+sam deploy --guided
+
+# Deploy (subsequent)
+sam deploy --parameter-overrides Environment=prod
+
+# Test locally
+sam local start-api
+curl http://localhost:3000/health
+
+# Tail logs
+sam logs -n FastApiFunction --tail
+
+# Delete stack
+sam delete
+```
+
+---
+
+### Option 2: Serverless Framework
+
+**File:** `serverless.yml`
+
+```yaml
+service: risk-api
+
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: python3.12
+  region: ap-south-1
+  stage: ${opt:stage, 'dev'}
+  
+  memorySize: 1024
+  timeout: 30
+  
+  environment:
+    ENVIRONMENT: ${self:provider.stage}
+    DYNAMODB_TABLE: !Ref OrdersTable
+    S3_BUCKET: !Ref DataBucket
+  
+  iam:
+    role:
+      statements:
+        # DynamoDB permissions
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - !GetAtt OrdersTable.Arn
+            - !Sub "${OrdersTable.Arn}/index/*"
+        
+        # S3 permissions
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+          Resource: !Sub "${DataBucket.Arn}/*"
+        
+        - Effect: Allow
+          Action:
+            - s3:ListBucket
+          Resource: !GetAtt DataBucket.Arn
+
+functions:
+  api:
+    handler: lambda_handler.handler
+    events:
+      - httpApi:
+          path: /
+          method: ANY
+      - httpApi:
+          path: /{proxy+}
+          method: ANY
+
+resources:
+  Resources:
+    # DynamoDB Table
+    OrdersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-orders-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES
+    
+    # S3 Bucket
+    DataBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:service}-data-${self:provider.stage}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+
+  Outputs:
+    ApiUrl:
+      Description: API Gateway URL
+      Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+plugins:
+  - serverless-python-requirements
+  - serverless-offline  # For local testing
+
+custom:
+  pythonRequirements:
+    dockerizePip: true  # Use Docker to compile dependencies
+    layer: true         # Package dependencies as Lambda layer
+    slim: true          # Remove unnecessary files
+    strip: false        # Keep debug symbols for better errors
+```
+
+**Commands:**
+```bash
+# Install plugins
+npm install --save-dev serverless-python-requirements serverless-offline
+
+# Deploy
+serverless deploy --stage dev
+serverless deploy --stage prod
+
+# Deploy single function (faster)
+serverless deploy function -f api
+
+# Test locally
+serverless offline start
+curl http://localhost:3000/health
+
+# Tail logs
+serverless logs -f api --tail
+
+# Remove stack
+serverless remove --stage dev
+```
+
+---
+
+### Lambda Best Practices
+
+#### 1. Dependencies Management
+
+**SAM:** Use `requirements.txt`
+```txt
+fastapi==0.109.0
+mangum==0.17.0
+pydantic==2.5.0
+boto3==1.34.0
+```
+
+**Serverless:** Use `requirements.txt` + plugin handles packaging
+```yaml
+# serverless.yml
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    dockerizePip: true
+    slim: true
+    layer: true  # Use Lambda layer for dependencies
+```
+
+#### 2. Lambda Handler with Proper Logging
+
+```python
+# lambda_handler.py
+import logging
+from mangum import Mangum
+from app.main import app
+
+# Configure logging for CloudWatch
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Mangum adapter
+handler = Mangum(
+    app,
+    lifespan="off",
+    api_gateway_base_path="/",  # For custom domains
+)
+
+def lambda_handler(event, context):
+    """
+    AWS Lambda entry point for FastAPI application.
+    
+    Supports both API Gateway and ALB events.
+    """
+    logger.info(f"Request: {event.get('httpMethod', 'N/A')} {event.get('path', 'N/A')}")
+    
+    try:
+        response = handler(event, context)
+        logger.info(f"Response status: {response.get('statusCode', 'N/A')}")
+        return response
+    except Exception as e:
+        logger.error(f"Lambda handler error: {e}", exc_info=True)
+        return {
+            'statusCode': 500,
+            'body': '{"error": "Internal server error"}'
+        }
+```
+
+#### 3. FastAPI App Configuration for Lambda
+
+```python
+# app/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+# Disable docs in production
+environment = os.getenv("ENVIRONMENT", "dev")
+docs_url = "/docs" if environment != "prod" else None
+redoc_url = "/redoc" if environment != "prod" else None
+
+app = FastAPI(
+    title="Risk API",
+    version="1.0.0",
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    root_path=""  # Important for Lambda
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Health check
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "environment": environment}
+```
+
+#### 4. Environment Variables
+
+```python
+# app/core/config.py
+from pydantic_settings import BaseSettings
+import os
+
+class Settings(BaseSettings):
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "dev")
+    AWS_REGION: str = os.getenv("AWS_REGION", "ap-south-1")
+    DYNAMODB_TABLE: str = os.getenv("DYNAMODB_TABLE", "orders")
+    S3_BUCKET: str = os.getenv("S3_BUCKET", "risk-data")
+    
+    class Config:
+        case_sensitive = True
+
+settings = Settings()
+```
+
+#### 5. Cold Start Optimization
+
+```python
+# app/main.py
+import functools
+import boto3
+
+# Initialize AWS clients outside handler (reused across invocations)
+@functools.lru_cache()
+def get_dynamodb_client():
+    return boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION'))
+
+@functools.lru_cache()
+def get_s3_client():
+    return boto3.client('s3', region_name=os.getenv('AWS_REGION'))
+```
+
+#### 6. Testing Lambda Functions
+
+```python
+# tests/test_lambda.py
+import pytest
+from lambda_handler import handler
+
+def test_lambda_handler_api_gateway_event():
+    """Test Lambda handler with API Gateway event."""
+    event = {
+        'httpMethod': 'GET',
+        'path': '/health',
+        'headers': {},
+        'queryStringParameters': None,
+        'body': None
+    }
+    context = {}
+    
+    response = handler(event, context)
+    
+    assert response['statusCode'] == 200
+    assert 'healthy' in response['body']
+
+def test_lambda_handler_with_cors():
+    """Test CORS headers in response."""
+    event = {
+        'httpMethod': 'OPTIONS',
+        'path': '/api/orders',
+        'headers': {'Origin': 'https://example.com'}
+    }
+    
+    response = handler(event, {})
+    
+    assert 'Access-Control-Allow-Origin' in response['headers']
+```
+
+---
+
+### Deployment Comparison
+
+| Feature | SAM | Serverless Framework |
+|---------|-----|----------------------|
+| **Language** | YAML (CloudFormation) | YAML (simpler syntax) |
+| **Learning Curve** | Moderate | Easy |
+| **Local Testing** | `sam local start-api` | `serverless offline` |
+| **Plugin Ecosystem** | Limited | Extensive |
+| **AWS Integration** | Native (AWS) | Third-party |
+| **Multi-cloud** | AWS only | AWS, Azure, GCP |
+| **Layer Support** | Manual | Automatic (`serverless-python-requirements`) |
+| **Cost** | Free (AWS tool) | Free (open source) |
+| **Best For** | AWS-native projects | Multi-cloud, fast iteration |
+
+**Recommendation:**
+- Use **SAM** if staying within AWS ecosystem and want native CloudFormation integration
+- Use **Serverless Framework** if need faster iteration, better DX, or multi-cloud support
 
 ---
 
