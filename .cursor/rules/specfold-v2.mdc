@@ -1,0 +1,363 @@
+---
+description: SpecFold v2 — incremental, spec-driven delivery with vertical slicing
+alwaysApply: true
+---
+
+# SpecFold v2
+
+## Intent
+
+Work ships **from written spec**, not guesswork. Deliver in **thin, production-ready slices**. Each slice: UI + API + Data + Tests + Docs.
+
+## Where specs live
+
+- **Legacy:** `specfold/<feature-kebab>/spec.md`
+- **SpecFlow v2:** `specflow-v2/features/<feature-name>/requirements/spec.md`
+- **Optional tracking:** `progress.md` (slice status), `changes.md` (change log)
+- **Optional context:** `repo_kb.md` (existing codebase map)
+
+## Incremental Change Workflow
+
+### 1. Feature Slicing
+
+Break features into **vertical slices** that deliver value:
+
+**Example: User Orders**
+- ✅ **Slice 1:** Create order (POST /orders + form + DB + tests)
+- ✅ **Slice 2:** View orders (GET endpoints + list + tests)
+- 🚧 **Slice 3:** Validation (edge cases + error handling)
+- ⏳ **Slice 4:** Performance (pagination + caching)
+- ⏳ **Slice 5:** Polish (email notifications + receipts)
+
+Each slice:
+- Delivers **user value**
+- Can be **deployed independently**
+- Includes **tests** (unit + integration)
+- Updates **documentation**
+- Takes **1-3 days** to complete
+
+### 2. Progress Tracking
+
+**`progress.md`** tracks slice status:
+```markdown
+# Feature: User Orders
+
+## Slices
+- [x] Slice 1: Create order (deployed 2024-06-10)
+- [x] Slice 2: View orders (deployed 2024-06-12)
+- [ ] Slice 3: Validation (in progress, target 2024-06-15)
+- [ ] Slice 4: Performance (planned)
+- [ ] Slice 5: Polish (planned)
+
+## Current Work
+- **Slice:** 3 (Validation)
+- **Status:** In Development
+- **Developer:** Alice
+- **Target Date:** 2024-06-15
+- **Blockers:** None
+
+## Deployed
+- **Dev:** Slice 3 (latest)
+- **Staging:** Slice 2
+- **Production:** Slice 2
+```
+
+### 3. Change Log
+
+**`changes.md`** documents what changed per slice:
+```markdown
+# Change Log: User Orders
+
+## Slice 2 (2024-06-12) — View Orders
+**Added:**
+- GET /orders/{orderId} endpoint
+- GET /users/{userId}/orders endpoint
+- Angular: order-list component
+- Angular: order-details component
+- Integration tests for GET endpoints
+
+**Changed:**
+- Updated WALKTHROUGH.md (APIs section)
+- Updated api-inventory.md
+
+**Deployed:**
+- Staging: 2024-06-12 14:00 UTC
+- Production: 2024-06-13 09:00 UTC
+
+---
+
+## Slice 1 (2024-06-10) — Create Order
+**Added:**
+- POST /orders endpoint
+- DynamoDB schema (USER#, ORDER# entities)
+- Angular: order-form component
+- Unit tests (Angular + FastAPI)
+- Integration tests (POST /orders + DynamoDB)
+
+**Deployed:**
+- Staging: 2024-06-10 16:00 UTC
+- Production: 2024-06-11 10:00 UTC
+```
+
+## When the user asks to "implement"
+
+### Step 1: Read Context
+1. `spec.md` — What to build
+2. `acceptance.md` — Success criteria
+3. `progress.md` — Current slice (if exists)
+4. `changes.md` — Previous slices (if exists)
+5. `repo_kb.md` — Existing codebase (if exists or `@`-mentioned)
+
+### Step 2: Identify Current Slice
+- If `progress.md` exists → implement the current slice
+- Otherwise → start with **Slice 1** (core happy path)
+
+### Step 3: Implement ONE Slice
+Focus on vertical delivery:
+- ✅ UI (Angular components)
+- ✅ API (FastAPI endpoints)
+- ✅ Data (DynamoDB/RDS schema)
+- ✅ Tests (unit + integration)
+- ✅ Docs (update WALKTHROUGH.md)
+
+Keep changes **small and reviewable** (< 500 lines per PR).
+
+### Step 4: Update Tracking
+After implementing a slice:
+1. Mark slice complete in `progress.md`
+2. Add entry to `changes.md`
+3. Update `docs/WALKTHROUGH.md` (if using SpecFlow v2)
+4. Create PR with slice scope
+
+### Step 5: Validate Before Moving On
+- [ ] All tests pass (unit + integration)
+- [ ] Acceptance criteria for slice are met
+- [ ] No regressions (existing tests still pass)
+- [ ] Code reviewed
+- [ ] Deployed to staging
+- [ ] Smoke tests pass
+- [ ] Ready for production
+
+### Step 6: Stop If Spec Is Wrong
+If the spec is incomplete or incorrect:
+- **Stop implementation**
+- **Propose spec edits** in chat
+- **Wait for confirmation**
+- **Never invent requirements**
+
+## Incremental Deployment
+
+Each slice is **independently deployable**:
+
+### Feature Flags
+Hide incomplete features:
+```typescript
+// Angular
+if (featureFlags.viewOrders) {
+  // Show "View Orders" button
+}
+```
+
+```python
+# FastAPI
+if feature_flags["view_orders"]:
+    # Enable GET /orders endpoints
+```
+
+### Deployment Strategy
+- **Slice 1:** Deploy to prod → hide incomplete UI
+- **Slice 2:** Deploy to prod → enable "View Orders" button
+- **Slice 3:** Deploy to prod → improve validation (no UI changes)
+
+### Rollback
+- Rollback is **per-slice**, not per-feature
+- Use Lambda aliases/versions
+- API Gateway stages
+- Feature flags can disable slices
+
+## Backward Compatibility
+
+### When Changing Existing Code
+
+**Add, don't remove:**
+- Deprecate old endpoints, add new ones
+- Keep old behavior until migration is complete
+
+**Version APIs:**
+```
+/v1/orders → /v2/orders
+```
+
+**Migration path:**
+```markdown
+# Migration: v1 → v2 Orders API
+
+## Breaking Changes
+- `total` field renamed to `totalAmount`
+- `items` now includes `itemName`
+
+## Timeline
+- 2024-06-15: v2 available, v1 still supported
+- 2024-07-15: v1 deprecated (30-day notice)
+- 2024-08-15: v1 removed
+
+## Migration Steps
+1. Update client to call /v2/orders
+2. Update response parsing (total → totalAmount)
+3. Test with both v1 and v2
+4. Switch to v2
+```
+
+**Breaking Changes Require:**
+- Migration guide in `deployment/migration.md`
+- Deprecation notice (30-day minimum)
+- Support both old and new during transition
+- Feature flag for gradual rollout
+
+## Coding Rules
+
+### Scope
+- **Do not expand** scope beyond `spec.md`/`acceptance.md`
+- If something is missing, **ask** before implementing
+- List **questions** and **assumptions** before large changes
+
+### Compatibility
+- **Prefer additive changes** (new endpoints, new fields)
+- **Avoid breaking changes** (remove endpoints, rename fields)
+- Version or flag breaking behavior
+
+### Contracts
+- Keep **HTTP handlers, request/response models, and OpenAPI** aligned
+- Update OpenAPI spec when APIs change
+- Validate OpenAPI spec in CI
+
+### Traceability
+- Reference **`SF-…`** IDs in commit messages
+- Reference slice number in PR title: `[Slice 2] Add view orders endpoint`
+
+### Security
+- Validate all inputs (Pydantic, Angular forms)
+- Encode all outputs (prevent XSS)
+- No secrets in code
+- Server-side authz
+- Fail-safe errors (no internal details leaked)
+
+## Slice Size Guidelines
+
+**Good Slice (1-3 days):**
+- Create order endpoint + form + tests
+- View orders endpoint + list + tests
+- Add validation to existing endpoint
+
+**Too Large (> 1 week):**
+- Create + view + edit + delete orders
+- Entire feature in one PR
+- Multiple API versions at once
+
+**Too Small (< 1 day):**
+- Add single validation rule
+- Fix typo in spec
+- Update documentation only
+
+**Split large features into 5-10 slices.**
+
+## Example: User Orders Feature
+
+### Slice Plan
+```markdown
+# User Orders — Slice Plan
+
+## Slice 1: Create Order (3 days)
+- POST /orders endpoint
+- DynamoDB schema
+- Angular: order-form component
+- Unit + integration tests
+- Deploy to staging → production
+
+## Slice 2: View Orders (2 days)
+- GET /orders/{orderId}
+- GET /users/{userId}/orders
+- Angular: order-list, order-details components
+- Tests
+- Deploy
+
+## Slice 3: Validation (2 days)
+- Input validation (FastAPI)
+- Form validation (Angular)
+- Error handling
+- Tests
+- Deploy
+
+## Slice 4: Performance (3 days)
+- Pagination (API + UI)
+- DynamoDB query optimization
+- Load tests
+- Deploy
+
+## Slice 5: Polish (2 days)
+- Email notifications (SES)
+- Order receipts (S3)
+- Tests
+- Deploy
+```
+
+### Implementation Order
+1. Implement Slice 1 → Deploy → Validate
+2. Implement Slice 2 → Deploy → Validate
+3. Implement Slice 3 → Deploy → Validate
+4. Implement Slice 4 → Deploy → Validate
+5. Implement Slice 5 → Deploy → Validate
+
+**Total:** 12 days, 5 deployments, 5 PRs
+
+Compare to waterfall: 12 days, 1 deployment, 1 large PR → higher risk, harder to review, delayed feedback.
+
+## Repo Knowledge Base (`repo_kb.md`)
+
+**Purpose:** When a change spans **multiple repos** or needs **brownfield** grounding, generate `repo_kb.md` first via `@.cursor/agents/repo_kb.md`.
+
+**Using it:** Any agent that writes code (`ship_from_spec`, `angular_from_spec`, `python_*`, `fullstack_from_spec`) must **read `repo_kb.md` if it exists** or is `@`-mentioned.
+
+**Treat as:** Facts about the codebase, not product requirements — **`spec.md` still wins** for scope.
+
+**Conflicts:** If `repo_kb.md` and `spec.md` disagree on feasibility, flag it and prefer updating the **spec** after human confirmation.
+
+## Stack-Specific Rules
+
+Cursor applies additional rules by glob pattern:
+
+- **Angular:** `.cursor/rules/angular.mdc` (`.ts`, `.html`, `.scss`, `angular.json`)
+- **Python:** `.cursor/rules/python.mdc` (`.py`, `pyproject.toml`, Alembic, SAM/CDK templates)
+
+When editing those files, obey those rules in addition to this file.
+
+## Integration with SpecFlow v2
+
+If using `specflow-v2/` structure:
+- Specs live in `features/<feature-name>/requirements/spec.md`
+- Progress tracking in `features/<feature-name>/progress.md`
+- Change log in `features/<feature-name>/changes.md`
+- Implementation agents read from these paths
+- Documentation agent updates `docs/WALKTHROUGH.md` after each slice
+
+## Anti-Patterns
+
+❌ **Implementing entire feature at once** (large PR, hard to review, delayed feedback)
+❌ **Skipping slice planning** (unclear progress, no intermediate value)
+❌ **Deploying multiple slices together** (harder to rollback)
+❌ **Breaking changes without migration plan** (breaks consumers)
+❌ **Implementing without spec** (scope creep, wasted effort)
+❌ **Ignoring `progress.md`** (duplicate work, confusion)
+
+## Summary
+
+**SpecFold v2 = Spec + Incremental Slices + Backward Compatibility**
+
+1. Write **spec** with acceptance criteria
+2. **Slice** feature into 5-10 vertical pieces
+3. Implement **ONE slice** at a time (UI + API + Data + Tests)
+4. **Deploy** after each slice
+5. **Track progress** in `progress.md`
+6. **Document changes** in `changes.md`
+7. Maintain **backward compatibility**
+8. Ship **value early and often**

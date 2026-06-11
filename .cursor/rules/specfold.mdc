@@ -9,13 +9,69 @@ alwaysApply: true
 
 Work ships **from written spec**, not guesswork. Prefer **small diffs** that complete the spec; avoid ceremony (no Jira/Confluence pipeline in this kit).
 
+**Incremental Development:** Features are built in thin, production-ready slices. Each slice delivers value and can be deployed independently.
+
 ## Where specs live
 
-- Default: `specfold/<feature-kebab>/spec.md` at workspace root.
-- Optional same folder: `plan.md` (checklist), `acceptance.md` (AC-only), **`repo_kb.md`** (captured **existing codebase** map from one or more `@`-mentioned repos — see `.cursor/agents/repo_kb.md`).
-- If the user names another path, use that path; stay inside the workspace.
+- **Default:** `specfold/<feature-kebab>/spec.md` at workspace root
+- **SpecFlow v2:** `specflow-v2/features/<feature-name>/requirements/spec.md` (production-grade structure)
+- **Optional same folder:** `plan.md` (checklist), `acceptance.md` (AC-only), **`repo_kb.md`** (captured **existing codebase** map)
+- **Incremental tracking:** `progress.md` (slice status), `changes.md` (change log)
+- If the user names another path, use that path; stay inside the workspace
 
 When creating a new feature folder for the first time, say which path you are using. Do not overwrite existing `spec.md` without asking.
+
+## Incremental Change Workflow
+
+### 1. Feature Slicing
+Break features into **vertical slices** (UI + API + Data + Tests):
+- **Slice 1:** Core happy path (e.g., create order)
+- **Slice 2:** Read operations (e.g., view orders)
+- **Slice 3:** Edge cases (e.g., validation errors)
+- **Slice 4:** Performance (e.g., pagination, caching)
+- **Slice 5:** Polish (e.g., email notifications)
+
+Each slice:
+- ✅ Delivers user value
+- ✅ Can be deployed independently
+- ✅ Includes tests
+- ✅ Updates documentation
+
+### 2. Progress Tracking (`progress.md`)
+Track slice completion:
+```markdown
+# Feature: User Orders
+
+## Slices
+- [x] Slice 1: Create order (deployed 2024-06-10)
+- [x] Slice 2: View orders (deployed 2024-06-12)
+- [ ] Slice 3: Validation (in progress)
+- [ ] Slice 4: Performance (planned)
+- [ ] Slice 5: Email notifications (planned)
+
+## Current Slice: Slice 3
+- Status: In Development
+- Target: 2024-06-15
+- Blockers: None
+```
+
+### 3. Change Log (`changes.md`)
+Document what changed per slice:
+```markdown
+# Change Log: User Orders
+
+## Slice 2 (2024-06-12)
+- Added GET /orders/{orderId}
+- Added GET /users/{userId}/orders
+- Added Angular order-list component
+- Updated WALKTHROUGH.md
+
+## Slice 1 (2024-06-10)
+- Added POST /orders
+- Added DynamoDB schema
+- Added Angular order-form component
+- Initial deployment
+```
 
 ## Repo knowledge base (`repo_kb.md`)
 

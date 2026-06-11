@@ -1,97 +1,504 @@
 ---
-description: Python — style, FastAPI, SQLAlchemy, Alembic, AWS (boto3, Lambda, containers, IaC)
+description: Python — style, FastAPI, SQLAlchemy, Alembic, AWS (boto3, Lambda, containers, IaC) (SpecFold v2)
 globs: "**/*.py,**/pyproject.toml,**/requirements*.txt,**/alembic/**/*.py,**/alembic.ini,**/cdk.json,**/template.yaml,**/samconfig.toml"
 alwaysApply: false
 ---
 
-# SpecFold — Python
+# SpecFold v2 — Python
 
 Assume **FastAPI + Pydantic** and **SQLAlchemy** unless the repo clearly uses something else — then match the codebase.
 
-## Style & typing
+---
 
-- Follow **`ruff` / `black`** and `pyproject.toml` (line length, import order).
-- **Type hints** on public functions and service methods; avoid bare `Any` at boundaries.
+## Style & Typing
 
-## Naming
+### Code Style
+- Follow **`ruff` / `black`** and `pyproject.toml` (line length, import order)
+- **Type hints** on public functions and service methods; avoid bare `Any` at boundaries
+  ```python
+  def create_order(order: CreateOrderRequest, user: User) -> OrderResponse:
+      pass
+  ```
+- Use **`typing`** extensions: `list[str]`, `dict[str, int]`, `Optional[T]`, `Union[T, U]`
 
-- **`snake_case`** — functions, variables, modules · **`PascalCase`** — classes · **`UPPER_SNAKE`** — module constants.
+### Naming
+- **`snake_case`** — functions, variables, modules
+- **`PascalCase`** — classes
+- **`UPPER_SNAKE`** — module constants
+  ```python
+  MAX_ORDER_ITEMS = 100
+  
+  class OrderService:
+      def create_order(self, order_data: dict) -> Order:
+          pass
+  ```
+
+---
 
 ## Layout (adapt paths to repo)
 
-- **Routers** — thin HTTP handlers; validate I/O; delegate to services.
-- **Services / domain** — business rules; unit-test without HTTP.
-- **Models** — ORM entities; use **separate Pydantic schemas** at API boundaries when the project does.
-- **DB** — session factory, engine; **Alembic** for migrations.
-- **Settings** — `pydantic-settings` or project equivalent; **no secrets in git**.
+### Project Structure
+- **Routers** (`app/routers/`) — thin HTTP handlers; validate I/O; delegate to services
+  ```python
+  @router.post("/orders", response_model=OrderResponse, status_code=201)
+  async def create_order(
+      order: CreateOrderRequest,
+      service: OrderService = Depends(get_order_service),
+      current_user: User = Depends(get_current_user)
+  ) -> OrderResponse:
+      return await service.create_order(order, current_user)
+  ```
+
+- **Services / domain** (`app/services/`) — business rules; unit-test without HTTP
+  ```python
+  class OrderService:
+      def __init__(self, repo: OrderRepository):
+          self.repo = repo
+      
+      async def create_order(self, order: CreateOrderRequest, user: User) -> Order:
+          # Business logic here
+          pass
+  ```
+
+- **Repositories** (`app/repositories/`) — data access; encapsulate ORM queries
+  ```python
+  class OrderRepository:
+      def __init__(self, session: AsyncSession):
+          self.session = session
+      
+      async def create(self, order: Order) -> Order:
+          self.session.add(order)
+          await self.session.flush()
+          return order
+  ```
+
+- **Models** (`app/models/`) — ORM entities; use **separate Pydantic schemas** at API boundaries
+  ```python
+  # SQLAlchemy model
+  class Order(Base):
+      __tablename__ = "orders"
+      id: Mapped[UUID] = mapped_column(primary_key=True)
+      user_id: Mapped[UUID] = mapped_column(nullable=False)
+  
+  # Pydantic schema (separate)
+  class CreateOrderRequest(BaseModel):
+      items: list[OrderItem]
+      total_amount: Decimal
+  ```
+
+- **DB** (`app/core/database.py`) — session factory, engine; **Alembic** for migrations
+- **Settings** (`app/core/config.py`) — `pydantic-settings` or project equivalent; **no secrets in git**
+
+---
 
 ## FastAPI & HTTP
 
-- **`Depends()`** for DB sessions, auth, config — avoid globals for request-scoped state.
-- **`response_model`**, tags, and explicit status codes for stable contracts.
-- Verbs: **`POST` → 201** with `Location` when creating; **`GET` single missing → 404** when appropriate; **`DELETE` → 204**; consistent **error body** shape (e.g. problem+json if used).
-- **Pydantic v2** models for request/response; validate at the edge.
-- **OpenAPI** must stay aligned with behavior when endpoints change.
+### Dependency Injection
+- **`Depends()`** for DB sessions, auth, config — avoid globals for request-scoped state
+  ```python
+  async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+      async with SessionLocal() as session:
+          yield session
+  
+  @router.post("/orders")
+  async def create_order(
+      order: CreateOrderRequest,
+      db: AsyncSession = Depends(get_db_session)
+  ):
+      pass
+  ```
 
-## Errors & logging
+### API Design
+- **`response_model`**, tags, and explicit status codes for stable contracts
+  ```python
+  @router.post("/orders", response_model=OrderResponse, status_code=201, tags=["orders"])
+  ```
 
-- Map domain errors to HTTP; **no stack traces** in production responses.
-- Log with **structured** context; never log secrets or full PII.
+- **HTTP Verbs & Status Codes:**
+  - **`POST` → 201** with `Location` header when creating
+  - **`GET` single missing → 404** when appropriate
+  - **`PATCH` / `PUT` → 200** or **204**
+  - **`DELETE` → 204**
+  - Consistent **error body** shape (problem+json if used)
+
+### Pydantic Validation
+- **Pydantic v2** models for request/response; validate at the edge
+  ```python
+  class CreateOrderRequest(BaseModel):
+      items: list[OrderItem] = Field(..., min_length=1, max_length=100)
+      total_amount: Decimal = Field(..., gt=0, le=1000000)
+      email: EmailStr
+      
+      @field_validator('items')
+      def validate_items(cls, items):
+          if not items:
+              raise ValueError('Order must have at least one item')
+          return items
+  ```
+
+### OpenAPI
+- **OpenAPI** must stay aligned with behavior when endpoints change
+- Generate spec: `python -m app.main --generate-openapi`
+- Validate spec: `npx @redocly/cli lint openapi.yaml`
+
+---
+
+## Errors & Logging
+
+### Error Handling
+- Map domain errors to HTTP; **no stack traces** in production responses
+  ```python
+  try:
+      result = await service.create_order(order)
+  except ValidationError as e:
+      raise HTTPException(status_code=400, detail="Invalid order data")
+  except OrderNotFoundError as e:
+      raise HTTPException(status_code=404, detail="Order not found")
+  except Exception as e:
+      logger.error(f"Order creation failed: {e}", extra={"user_id": user.id})
+      raise HTTPException(status_code=500, detail="Internal server error")
+  ```
+
+### Logging
+- Log with **structured** context; never log secrets or full PII
+  ```python
+  import logging
+  import json
+  
+  logger = logging.getLogger(__name__)
+  
+  logger.info(json.dumps({
+      'event': 'order_created',
+      'order_id': order.id,
+      'user_id': user.id,
+      'correlation_id': correlation_id
+  }))
+  ```
+
+---
 
 ## Async
 
-- If the app is **async end-to-end**, use async routes and async DB drivers consistently; do not block the event loop on CPU-heavy work.
+### Async/Await
+- If the app is **async end-to-end**, use async routes and async DB drivers consistently
+- Do not block the event loop on CPU-heavy work
+  ```python
+  @router.post("/orders")
+  async def create_order(order: CreateOrderRequest):
+      # Good: async I/O
+      result = await service.create_order(order)
+      
+      # Bad: blocking I/O in async route
+      # time.sleep(10)  # Don't do this
+  ```
 
-## Data access (SQLAlchemy)
+---
 
-- Prefer **2.0-style** `select()` if the codebase does.
-- Avoid **N+1** — `selectinload` / `joinedload` or narrow projections for list endpoints.
-- **Alembic:** review autogen scripts; one logical change per revision when practical; do not rewrite applied migrations — add a new revision.
-- **Raw SQL:** bound parameters only; never interpolate user input into SQL strings.
-- **Transactions:** one transaction per use-case when possible; keep transactions short.
+## Data Access (SQLAlchemy)
+
+### SQLAlchemy 2.0
+- Prefer **2.0-style** `select()` if the codebase does
+  ```python
+  from sqlalchemy import select
+  
+  result = await session.execute(
+      select(Order).where(Order.user_id == user_id)
+  )
+  orders = result.scalars().all()
+  ```
+
+### N+1 Prevention
+- Avoid **N+1** — `selectinload` / `joinedload` or narrow projections for list endpoints
+  ```python
+  result = await session.execute(
+      select(Order)
+      .options(selectinload(Order.items))
+      .where(Order.user_id == user_id)
+  )
+  ```
+
+### Alembic Migrations
+- Review autogen scripts; one logical change per revision when practical
+- Do not rewrite applied migrations — add a new revision
+- **Backward compatible migrations:**
+  ```python
+  # Step 1: Add nullable column
+  def upgrade():
+      op.add_column('orders', sa.Column('status_v2', sa.String(20), nullable=True))
+  
+  # Step 2: Backfill data (separate migration)
+  def upgrade():
+      op.execute("UPDATE orders SET status_v2 = status WHERE status_v2 IS NULL")
+  
+  # Step 3: Make not-nullable, drop old column (separate migration)
+  def upgrade():
+      op.alter_column('orders', 'status_v2', nullable=False)
+      op.drop_column('orders', 'status')
+  ```
+
+### Raw SQL
+- **Bound parameters only**; never interpolate user input into SQL strings
+  ```python
+  # Good
+  result = await session.execute(
+      text("SELECT * FROM orders WHERE user_id = :user_id"),
+      {"user_id": user_id}
+  )
+  
+  # Bad
+  # result = await session.execute(f"SELECT * FROM orders WHERE user_id = '{user_id}'")
+  ```
+
+### Transactions
+- One transaction per use-case when possible; keep transactions short
+  ```python
+  async def create_order(self, order_data: CreateOrderRequest) -> Order:
+      async with self.session.begin():
+          order = Order(...)
+          self.session.add(order)
+          await self.session.flush()
+          return order
+  ```
+
+---
 
 ## Tests
 
-- **`pytest`** — arrange / act / assert; fixtures for DB/API clients; no production data.
+### pytest
+- **`pytest`** — arrange / act / assert
+- Fixtures for DB/API clients; no production data
+  ```python
+  @pytest.fixture
+  async def db_session():
+      async with SessionLocal() as session:
+          yield session
+          await session.rollback()
+  
+  @pytest.mark.asyncio
+  async def test_create_order__SF_001(db_session):
+      repo = OrderRepository(db_session)
+      order = Order(user_id=uuid4(), total_amount=Decimal('49.99'))
+      
+      created = await repo.create(order)
+      
+      assert created.id is not None
+      assert created.total_amount == Decimal('49.99')
+  ```
+
+### Coverage
+- Target: **>80%** per slice
+- Run: `pytest --cov=app --cov-report=html`
+
+---
 
 ## AWS (when the service runs on AWS)
 
-Match the repo’s pattern: **Lambda**, **ECS/Fargate**, **EKS**, **App Runner**, **Elastic Beanstalk**, or **CDK / SAM / Terraform** — do not invent a new deployment model unless the spec asks.
+Match the repo's pattern: **Lambda**, **ECS/Fargate**, **EKS**, **App Runner**, **Elastic Beanstalk**, or **CDK / SAM / Terraform** — do not invent a new deployment model unless the spec asks.
 
-### Credentials & config
+### Credentials & Config
+- Use **IAM roles** for compute (task role, Lambda execution role) — **no long-lived access keys**
+  ```python
+  # Good: Use IAM role (default)
+  s3_client = boto3.client('s3')
+  
+  # Bad: Hardcoded credentials
+  # s3_client = boto3.client('s3', aws_access_key_id='...', aws_secret_access_key='...')
+  ```
 
-- Use **IAM roles** for compute (task role, Lambda execution role) — **no long-lived access keys** in code or baked into images.
-- Read secrets from **Secrets Manager** or **SSM Parameter Store** (or the platform’s secret injection); never commit secrets.
-- Prefer **explicit AWS region** from env or settings; fail fast if required env vars are missing in prod.
+- Read secrets from **Secrets Manager** or **SSM Parameter Store**
+  ```python
+  import boto3
+  import json
+  
+  secrets_client = boto3.client('secretsmanager')
+  response = secrets_client.get_secret_value(SecretId='db-credentials')
+  secrets = json.loads(response['SecretString'])
+  db_password = secrets['password']
+  ```
 
-### SDK usage
+- Prefer **explicit AWS region** from env or settings; fail fast if required env vars are missing
+  ```python
+  import os
+  
+  AWS_REGION = os.getenv('AWS_REGION')
+  if not AWS_REGION:
+      raise ValueError('AWS_REGION environment variable is required')
+  ```
 
-- **`boto3`** / **`botocore`** for sync; **`aioboto3`** when the call chain is async — reuse **clients per process** where appropriate; avoid creating a new client on every hot-path call without reason.
-- Use **high-level APIs** when they fit (e.g. S3 transfer, DynamoDB resource) but keep **retry / timeout** behavior aligned with team defaults (`botocore.config.Config`).
+### SDK Usage
+- **`boto3`** / **`botocore`** for sync; **`aioboto3`** when the call chain is async
+- Reuse **clients per process** where appropriate
+  ```python
+  # Module-level client (reused across requests)
+  s3_client = boto3.client('s3', region_name=AWS_REGION)
+  ```
+
+- Use **high-level APIs** when they fit (e.g. S3 transfer, DynamoDB resource)
+- Keep **retry / timeout** behavior aligned with team defaults
+  ```python
+  from botocore.config import Config
+  
+  config = Config(
+      retries={'max_attempts': 3, 'mode': 'adaptive'},
+      connect_timeout=5,
+      read_timeout=10
+  )
+  s3_client = boto3.client('s3', config=config)
+  ```
 
 ### Lambda
+- **Handler thin:** parse event, delegate to pure/testable functions
+  ```python
+  def lambda_handler(event, context):
+      try:
+          order_service = OrderService()
+          result = order_service.process_order(event)
+          return {"statusCode": 200, "body": json.dumps(result)}
+      except Exception as e:
+          logger.error(f"Order processing failed: {e}")
+          return {"statusCode": 500, "body": "Internal error"}
+  ```
 
-- **Handler** thin: parse event, delegate to pure/testable functions; return structured errors the caller expects.
-- Respect **timeout and memory** in design; avoid blocking the whole handler on unbounded work — **SQS partial batch failure** response shape when using SQS triggers.
-- **Cold start:** lazy-import heavy deps when the team already does; don’t micro-optimize unless the spec calls for it.
+- Respect **timeout and memory** in design
+- **SQS partial batch failure** response shape when using SQS triggers
+  ```python
+  def lambda_handler(event, context):
+      failed_messages = []
+      for record in event['Records']:
+          try:
+              process_message(record)
+          except Exception as e:
+              logger.error(f"Message processing failed: {e}")
+              failed_messages.append({'itemIdentifier': record['messageId']})
+      
+      return {'batchItemFailures': failed_messages}
+  ```
 
-### Messaging & events
+- **Cold start:** lazy-import heavy deps when the team already does
 
-- **SQS:** idempotent processing, visibility timeout, DLQ strategy as in spec; **SNS** fan-out: validate message schema at the boundary.
-- **EventBridge:** use detail-type and source conventions already in the repo.
+### Messaging & Events
+- **SQS:** idempotent processing, visibility timeout, DLQ strategy as in spec
+  ```python
+  def process_message(message):
+      message_id = message['MessageId']
+      if is_processed(message_id):
+          logger.info(f"Message {message_id} already processed")
+          return
+      # Process message
+      mark_as_processed(message_id)
+  ```
 
-### Data stores
+- **SNS** fan-out: validate message schema at the boundary
+- **EventBridge:** use detail-type and source conventions already in the repo
 
-- **DynamoDB:** explicit partition/sort keys, **conditional writes** for concurrency, avoid unbounded scans; pagination for lists.
-- **S3:** server-side encryption defaults, **presigned URLs** for browser upload/download when applicable; validate `Content-Type` / size limits at the API edge.
-- **RDS/Aurora from Lambda or ECS:** use **connection pooling** appropriate to the runtime (RDS Proxy, pooler, or short-lived connections per invocation per team standard).
+### Data Stores
+
+#### DynamoDB
+- Explicit partition/sort keys, **conditional writes** for concurrency
+  ```python
+  table.put_item(
+      Item={
+          'PK': f'USER#{user_id}',
+          'SK': f'ORDER#{order_id}',
+          'order_date': '2024-06-11',
+          'total_amount': Decimal('49.99')
+      },
+      ConditionExpression='attribute_not_exists(PK)'
+  )
+  ```
+
+- Avoid unbounded scans; **pagination** for lists
+  ```python
+  response = table.query(
+      KeyConditionExpression=Key('PK').eq(f'USER#{user_id}'),
+      Limit=20
+  )
+  items = response['Items']
+  last_key = response.get('LastEvaluatedKey')
+  ```
+
+#### S3
+- Server-side encryption defaults
+- **Presigned URLs** for browser upload/download
+  ```python
+  presigned_url = s3_client.generate_presigned_url(
+      'put_object',
+      Params={'Bucket': 'receipts-bucket', 'Key': f'{order_id}.pdf'},
+      ExpiresIn=3600  # 1 hour
+  )
+  ```
+
+- Validate `Content-Type` / size limits at the API edge
+
+#### RDS/Aurora from Lambda or ECS
+- Use **connection pooling** appropriate to the runtime
+- **RDS Proxy** for Lambda
+- Short-lived connections per invocation per team standard
 
 ### Observability
+- **Structured logs** (JSON) when CloudWatch Logs is standard
+  ```python
+  logger.info(json.dumps({
+      'event': 'order_created',
+      'order_id': order.id,
+      'request_id': context.aws_request_id,
+      'correlation_id': correlation_id
+  }))
+  ```
 
-- **Structured logs** (JSON) when CloudWatch Logs is standard; include **request id / trace id** when API Gateway or ALB passes them.
-- **X-Ray** or **OpenTelemetry** only if the project already uses them — wire spans consistently.
+- Include **request id / trace id** when API Gateway or ALB passes them
+- **X-Ray** or **OpenTelemetry** only if the project already uses them
+  ```python
+  from aws_xray_sdk.core import xray_recorder
+  
+  @xray_recorder.capture('create_order')
+  def create_order(order):
+      pass
+  ```
 
 ### IaC (Python CDK or adjacent)
+- **Least-privilege IAM** policies
+  ```python
+  PolicyStatement(
+      actions=["dynamodb:PutItem", "dynamodb:GetItem"],
+      resources=[orders_table.table_arn]
+  )
+  ```
 
-- **Least-privilege IAM** policies; tighten resource ARNs where possible; no `*` actions on `*` resources in production templates unless justified in spec.
-- Keep **environment-specific** values in context/parameters — not hardcoded account IDs unless the repo convention does.
+- Tighten resource ARNs where possible; no `*` actions on `*` resources in production
+- Keep **environment-specific** values in context/parameters
+
+---
+
+## SpecFold v2 Integration
+
+### Incremental Slicing
+- Implement **ONE slice at a time** (endpoint + service + repository + tests)
+- Do **not** implement entire feature at once
+
+### Backward Compatibility
+- **Additive changes:** New endpoints, new optional fields
+- **API versioning:** `/v1/` and `/v2/` for breaking changes
+- **Deprecation:** Mark old endpoints as deprecated in OpenAPI
+- **Feature flags:** Control endpoint exposure
+
+### Traceability
+- Reference **`SF-…`** IDs in:
+  - Code comments: `# SF-001: Validate order items before persisting`
+  - Test names: `test_create_order_with_valid_items__SF_001()`
+  - Commit messages: `[Slice 1] Add create order endpoint (SF-001)`
+
+---
+
+## Anti-Patterns
+
+❌ **No type hints** → ✅ Type all function signatures  
+❌ **Globals for request state** → ✅ Use `Depends()`  
+❌ **Bare `Any` everywhere** → ✅ Use proper types  
+❌ **N+1 queries** → ✅ Use eager loading (`selectinload`, `joinedload`)  
+❌ **Secrets in code** → ✅ Use Secrets Manager / SSM  
+❌ **SQL injection** → ✅ Use bound parameters  
+❌ **No error handling** → ✅ Use `HTTPException` with proper status codes  
+❌ **No tests** → ✅ Write unit + integration tests (>80% coverage)  
+❌ **Breaking migrations** → ✅ Multi-step backward-compatible migrations  
+❌ **Wildcard IAM permissions** → ✅ Least-privilege policies

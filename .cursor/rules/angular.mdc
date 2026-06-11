@@ -1,42 +1,304 @@
 ---
-description: Angular — structure, RxJS, forms, performance, security, tests
+description: Angular — structure, RxJS, forms, performance, security, tests (SpecFold v2)
 globs: "**/*.ts,**/*.html,**/*.scss,**/angular.json,**/tsconfig*.json"
 alwaysApply: false
 ---
 
-# SpecFold — Angular
+# SpecFold v2 — Angular
 
 Follow **existing** project layout (modules vs standalone, state library). Do not introduce a second architectural style in one feature without an explicit spec note.
 
-## Structure & modules
+---
 
-- Prefer **standalone components** and explicit `imports[]` when the repo already does; otherwise match **NgModule** patterns in-tree.
+## Structure & Modules
+
+- **Prefer standalone components** (Angular 19+) with explicit `imports[]` when the repo already does; otherwise match **NgModule** patterns in-tree.
 - **Lazy-load** feature routes; keep the root shell light.
+  ```typescript
+  const routes: Routes = [
+    { path: 'orders', loadComponent: () => import('./orders/order-list.component') }
+  ];
+  ```
 - **Smart vs dumb:** smart containers load data and handle side effects; presentational components use `@Input` / `@Output` only.
+- **OnPush change detection** for all presentational components when inputs are immutable.
 
-## State & async
+---
 
+## State & Async
+
+### Signals (Angular 19+)
+- **Prefer signals** for reactive state: `signal()`, `computed()`, `effect()`
+  ```typescript
+  readonly orders = signal<Order[]>([]);
+  readonly orderCount = computed(() => this.orders().length);
+  readonly selectedOrder = signal<Order | null>(null);
+  ```
+- Use `effect()` for side effects (logging, analytics, DOM updates)
+- Avoid mixing signals and RxJS unnecessarily — pick one per feature
+
+### RxJS
 - Match the repo: **Signals**, **RxJS-only**, or **NgRx** — pick one strategy per feature.
-- Prefer **`AsyncPipe`** in templates to avoid subscription leaks.
-- RxJS: `switchMap` when later emissions should cancel prior work; `exhaustMap` for double-submit guards; `catchError` at HTTP boundaries.
+- **`AsyncPipe`** in templates to avoid subscription leaks.
+- **Operators:**
+  - `switchMap` — when later emissions should cancel prior work (search, autocomplete)
+  - `exhaustMap` — for double-submit guards (form submission)
+  - `catchError` — at HTTP boundaries (return fallback or rethrow)
+  - `debounceTime(500)` — for user input (search)
+  - `distinctUntilChanged()` — avoid duplicate emissions
+  - `shareReplay(1)` — share HTTP requests across subscribers
 
-## Forms & a11y
+---
 
-- **Reactive forms** for multi-field or async validation; align client validators with server rules when the spec says so.
-- Errors: associate messages with controls (`aria-describedby`, invalid state on inputs).
+## Dependency Injection
+
+### Modern Style (Angular 19+)
+- **Prefer `inject()`** over constructor injection
+  ```typescript
+  export class OrderService {
+    private http = inject(HttpClient);
+    private authService = inject(AuthService);
+  }
+  ```
+
+### Constructor Injection (Legacy)
+- Use for components that need to be tested with TestBed
+  ```typescript
+  constructor(
+    private http: HttpClient,
+    private authService: AuthService
+  ) {}
+  ```
+
+---
+
+## Forms & Validation
+
+### Reactive Forms
+- **Reactive forms** for multi-field or async validation
+- Align client validators with server rules when the spec says so
+  ```typescript
+  orderForm = this.fb.group({
+    items: this.fb.array([], [Validators.required, Validators.minLength(1)]),
+    totalAmount: [null, [Validators.required, Validators.min(0.01)]],
+    email: ['', [Validators.required, Validators.email]]
+  });
+  ```
+
+### Custom Validators
+- For complex validation logic
+  ```typescript
+  export function orderItemsValidator(): ValidatorFn {
+    return (control: AbstractControl): ValidationErrors | null => {
+      const items = control.value as OrderItem[];
+      return items.length === 0 ? { noItems: true } : null;
+    };
+  }
+  ```
+
+### Accessibility
+- **Associate error messages** with controls
+  ```html
+  <input [attr.aria-describedby]="email.invalid ? 'email-error' : null" />
+  <span id="email-error" *ngIf="email.invalid">Invalid email</span>
+  ```
+
+---
 
 ## Security
 
-- **Never** render untrusted HTML without sanitization; use `DomSanitizer` only for known-safe patterns.
-- Avoid tokens in URLs and logs; use HTTP-only cookies or headers per project auth design.
+### XSS Prevention
+- **Never** render untrusted HTML without sanitization
+- Use `DomSanitizer` only for known-safe patterns
+  ```typescript
+  constructor(private sanitizer: DomSanitizer) {}
+  
+  getSafeHtml(html: string) {
+    return this.sanitizer.sanitize(SecurityContext.HTML, html);
+  }
+  ```
+- Angular sanitizes by default — don't bypass unless necessary
+
+### Authentication
+- Avoid tokens in URLs and logs
+- **HTTP-only cookies** or **Authorization headers** per project auth design
+- **Auth guard** for protected routes
+  ```typescript
+  export const authGuard: CanActivateFn = (route, state) => {
+    const authService = inject(AuthService);
+    if (authService.isAuthenticated()) {
+      return true;
+    }
+    return inject(Router).createUrlTree(['/login']);
+  };
+  ```
+
+### CSRF Protection
+- Angular `HttpClient` includes XSRF token by default
+- Don't disable XSRF protection without spec justification
+
+---
 
 ## Performance
 
-- Use **`ChangeDetectionStrategy.OnPush`** on presentational components when inputs are immutable or observables drive the view.
-- Avoid heavy sync work in constructors; use `ngOnInit` / `effect()` / `afterNextRender` as appropriate.
-- Respect **bundle budgets** in `angular.json`.
+### Change Detection
+- **`ChangeDetectionStrategy.OnPush`** on presentational components when inputs are immutable or observables drive the view
+  ```typescript
+  @Component({
+    changeDetection: ChangeDetectionStrategy.OnPush
+  })
+  ```
 
-## Tests
+### Optimization
+- **Avoid heavy sync work** in constructors; use `ngOnInit` / `effect()` / `afterNextRender`
+- **TrackBy** for `*ngFor` loops
+  ```typescript
+  trackByOrderId(index: number, order: Order): string {
+    return order.id;
+  }
+  ```
+- **Virtual scrolling** for large lists (CDK VirtualScrollViewport)
+  ```html
+  <cdk-virtual-scroll-viewport itemSize="50">
+    <div *cdkVirtualFor="let order of orders">{{ order.id }}</div>
+  </cdk-virtual-scroll-viewport>
+  ```
+- **Lazy loading** for routes and modules
+- **Debounce** user input (500ms for search)
+- Respect **bundle budgets** in `angular.json`
 
-- Unit: **Jest** or **Karma/Jasmine** per project; assert **user-visible behavior** tied to spec acceptance, not private fields.
-- E2E: **Cypress** or **Playwright** only where the spec calls for critical flows.
+---
+
+## Error Handling
+
+### HTTP Errors
+- **catchError** in services, not components
+  ```typescript
+  createOrder(order: CreateOrderRequest): Observable<OrderResponse> {
+    return this.http.post<OrderResponse>('/orders', order).pipe(
+      catchError((error: HttpErrorResponse) => {
+        console.error('Order creation failed:', error);
+        this.toastService.error('Failed to create order');
+        return throwError(() => new Error('Order creation failed'));
+      })
+    );
+  }
+  ```
+
+### User-Friendly Messages
+- Display errors in UI (toasts, inline messages, error pages)
+- Don't leak internal details to users
+
+---
+
+## Testing
+
+### Unit Tests
+- **Jest** or **Karma/Jasmine** per project
+- Assert **user-visible behavior** tied to spec acceptance, not private fields
+  ```typescript
+  describe('OrderFormComponent', () => {
+    it('should create order with valid inputs (SF-001)', () => {
+      component.orderForm.patchValue({
+        items: [{ productId: '123', quantity: 2 }],
+        totalAmount: 49.99
+      });
+      expect(component.orderForm.valid).toBe(true);
+    });
+    
+    it('should show error for empty items (SF-002)', () => {
+      component.orderForm.patchValue({ items: [] });
+      expect(component.orderForm.get('items')?.hasError('required')).toBe(true);
+    });
+  });
+  ```
+
+### E2E Tests
+- **Cypress** or **Playwright** only where the spec calls for critical flows
+  ```typescript
+  describe('Create Order (SF-001)', () => {
+    it('allows user to create order with multiple items', () => {
+      cy.visit('/orders/create');
+      cy.get('[data-testid="product-select"]').select('Product 1');
+      cy.get('[data-testid="quantity-input"]').type('2');
+      cy.get('[data-testid="submit-button"]').click();
+      cy.contains('Order created successfully');
+    });
+  });
+  ```
+
+### Coverage
+- Target: **>80%** for components and services per slice
+
+---
+
+## SpecFold v2 Integration
+
+### Incremental Slicing
+- Implement **ONE slice at a time** (UI component + service + route + tests)
+- Do **not** implement entire feature at once
+
+### Feature Flags
+- Hide incomplete UI behind feature flags
+  ```typescript
+  export const FEATURE_FLAGS = {
+    viewOrders: false, // Not ready yet
+    createOrders: true
+  };
+  
+  @Component({
+    template: `
+      <button *ngIf="featureFlags.viewOrders">View Orders</button>
+    `
+  })
+  export class OrdersComponent {
+    featureFlags = FEATURE_FLAGS;
+  }
+  ```
+
+### Backward Compatibility
+- **Additive changes:** New routes, new components, new services
+- **Avoid breaking changes:** Removing routes, renaming components, changing public APIs
+- Use **router guards** to control access to incomplete features
+
+### Traceability
+- Reference **`SF-…`** IDs in:
+  - Component comments: `// SF-001: Display order form with items`
+  - Test descriptions: `it('should validate order items (SF-001)', ...)`
+  - Commit messages: `[Slice 1] Add order form component (SF-001, SF-002)`
+
+---
+
+## Code Quality
+
+### TypeScript
+- **Strict mode** enabled in `tsconfig.json`
+- **No `any`** unless absolutely necessary (use `unknown` instead)
+- **Type all function parameters and return types**
+  ```typescript
+  createOrder(order: CreateOrderRequest): Observable<OrderResponse> {
+    return this.http.post<OrderResponse>('/orders', order);
+  }
+  ```
+
+### Linting
+- **ESLint + Prettier** per `eslintrc.json` and `.prettierrc`
+- Fix all linter errors before committing
+
+### Naming Conventions
+- **PascalCase:** Components, services, interfaces (`OrderFormComponent`, `OrderService`, `Order`)
+- **camelCase:** Variables, functions, properties (`totalAmount`, `createOrder`, `userId`)
+- **kebab-case:** File names, selectors (`order-form.component.ts`, `app-order-form`)
+- **SCREAMING_SNAKE_CASE:** Constants (`FEATURE_FLAGS`, `API_BASE_URL`)
+
+---
+
+## Anti-Patterns
+
+❌ **Using `any` everywhere** → ✅ Use proper types  
+❌ **Manual subscriptions without unsubscribe** → ✅ Use `AsyncPipe` or `takeUntilDestroyed()`  
+❌ **Heavy logic in templates** → ✅ Move to component/service  
+❌ **Default change detection everywhere** → ✅ Use `OnPush` for presentational components  
+❌ **Bypassing security without sanitization** → ✅ Use `DomSanitizer` or avoid altogether  
+❌ **No error handling** → ✅ Use `catchError` in services  
+❌ **No tests** → ✅ Write unit + E2E tests (>80% coverage)  
+❌ **Secrets in code** → ✅ Use environment files (not committed)
